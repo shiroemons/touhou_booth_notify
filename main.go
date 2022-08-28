@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dghubble/go-twitter/twitter"
+	"github.com/dghubble/oauth1"
 	"github.com/gocolly/colly"
+	"github.com/joho/godotenv"
 	"github.com/shopspring/decimal"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
@@ -30,6 +33,18 @@ type Item struct {
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp"`
 }
 
+func envLoad() {
+	if os.Getenv("GO_ENV") == "" {
+		os.Setenv("GO_ENV", "development")
+	}
+	if os.Getenv("GO_ENV") != "production" {
+		fileName := fmt.Sprintf(".env.%s", os.Getenv("GO_ENV"))
+		if err := godotenv.Load(fileName); err != nil {
+			log.Fatal("Error loading .env file")
+		}
+	}
+}
+
 func mustGetenv(k string) string {
 	v := os.Getenv(k)
 	if v == "" {
@@ -39,9 +54,27 @@ func mustGetenv(k string) string {
 }
 
 func main() {
+	log.Println("touhou booth notify start!")
 	ctx := context.Background()
+	envLoad()
 
-	dsn := mustGetenv("DSN")
+	var (
+		consumerKey       = mustGetenv("TWITTER_CONSUMER_KEY")
+		consumerSecret    = mustGetenv("TWITTER_CONSUMER_SECRET")
+		accessToken       = mustGetenv("TWITTER_ACCESS_TOKEN")
+		accessTokenSecret = mustGetenv("TWITTER_ACCESS_TOKEN_SECRET")
+		dsn               = mustGetenv("DATABASE_DSN")
+	)
+
+	// Twitter client setup
+	config := oauth1.NewConfig(consumerKey, consumerSecret)
+	token := oauth1.NewToken(accessToken, accessTokenSecret)
+	httpClient := config.Client(oauth1.NoContext, token)
+
+	// Twitter client
+	client := twitter.NewClient(httpClient)
+
+	// Database
 	sqldb := sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(dsn)))
 	db := bun.NewDB(sqldb, pgdialect.New())
 
@@ -49,6 +82,7 @@ func main() {
 	if err := db.NewSelect().ColumnExpr("version()").Scan(ctx, &v); err != nil {
 		panic(err)
 	}
+	log.Println(v)
 
 	items, err := getItems()
 	if err != nil {
@@ -56,8 +90,9 @@ func main() {
 	}
 
 	for i := len(items) - 1; i >= 0; i-- {
-		run(ctx, db, items[i])
+		run(ctx, db, items[i], client)
 	}
+	log.Println("touhou booth notify successfully completed!")
 }
 
 var _ bun.BeforeAppendModelHook = (*Item)(nil)
@@ -110,7 +145,7 @@ func getItems() ([]*Item, error) {
 	return items, nil
 }
 
-func run(ctx context.Context, db *bun.DB, item *Item) {
+func run(ctx context.Context, db *bun.DB, item *Item, cli *twitter.Client) {
 	dbItem := itemFindByURL(ctx, db, item.URL)
 
 	if dbItem.ID == 0 {
@@ -118,14 +153,14 @@ func run(ctx context.Context, db *bun.DB, item *Item) {
 			return
 		}
 
-		tweet := fmt.Sprintf("【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ",
+		msg := fmt.Sprintf("【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ",
 			item.Category,
 			item.Name,
 			item.Price,
 			item.URL,
 			item.ShopName,
 		)
-		fmt.Println(tweet)
+		tweet(cli, msg)
 	} else if item.Price != dbItem.Price {
 		oldPrice := decimal.RequireFromString(dbItem.Price)
 		newPrice := decimal.RequireFromString(item.Price)
@@ -134,7 +169,7 @@ func run(ctx context.Context, db *bun.DB, item *Item) {
 			return
 		}
 
-		tweet := fmt.Sprintf("【🆙更新情報🆙】\n\n%s\n%s\n%s円 -> %s円\n\n%s\n%s\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ",
+		msg := fmt.Sprintf("【🆙更新情報🆙】\n\n%s\n%s\n%s円 -> %s円\n\n%s\n%s\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ",
 			item.Category,
 			item.Name,
 			oldPrice,
@@ -142,7 +177,7 @@ func run(ctx context.Context, db *bun.DB, item *Item) {
 			item.URL,
 			item.ShopName,
 		)
-		fmt.Println(tweet)
+		tweet(cli, msg)
 	}
 }
 
@@ -169,4 +204,11 @@ func update(ctx context.Context, db *bun.DB, item *Item) error {
 		return err
 	}
 	return nil
+}
+
+func tweet(cli *twitter.Client, msg string) {
+	_, _, err := cli.Statuses.Update(msg, nil)
+	if err != nil {
+		log.Printf("tweet error: %s", err)
+	}
 }
