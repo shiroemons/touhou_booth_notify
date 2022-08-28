@@ -1,0 +1,1 @@
+# touhou_booth_notify
