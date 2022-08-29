@@ -156,7 +156,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, cli *twitter.Client) {
 		msg := fmt.Sprintf("【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ",
 			item.Category,
 			item.Name,
-			item.Price,
+			decimal.RequireFromString(item.Price),
 			item.URL,
 			item.ShopName,
 		)
