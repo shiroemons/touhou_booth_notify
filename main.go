@@ -35,7 +35,10 @@ type Item struct {
 
 func envLoad() {
 	if os.Getenv("GO_ENV") == "" {
-		os.Setenv("GO_ENV", "development")
+		err := os.Setenv("GO_ENV", "development")
+		if err != nil {
+			return
+		}
 	}
 	if os.Getenv("GO_ENV") != "production" {
 		fileName := fmt.Sprintf(".env.%s", os.Getenv("GO_ENV"))
@@ -53,17 +56,12 @@ func mustGetenv(k string) string {
 	return v
 }
 
-func main() {
-	log.Println("touhou booth notify start!")
-	ctx := context.Background()
-	envLoad()
-
+func setupTwitterClient() *twitter.Client {
 	var (
 		consumerKey       = mustGetenv("TWITTER_CONSUMER_KEY")
 		consumerSecret    = mustGetenv("TWITTER_CONSUMER_SECRET")
 		accessToken       = mustGetenv("TWITTER_ACCESS_TOKEN")
 		accessTokenSecret = mustGetenv("TWITTER_ACCESS_TOKEN_SECRET")
-		dsn               = mustGetenv("DATABASE_DSN")
 	)
 
 	// Twitter client setup
@@ -71,8 +69,11 @@ func main() {
 	token := oauth1.NewToken(accessToken, accessTokenSecret)
 	httpClient := config.Client(oauth1.NoContext, token)
 
-	// Twitter client
-	client := twitter.NewClient(httpClient)
+	return twitter.NewClient(httpClient)
+}
+
+func setupDB(ctx context.Context) *bun.DB {
+	dsn := mustGetenv("DATABASE_DSN")
 
 	// Database
 	sqldb := sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(dsn)))
@@ -83,6 +84,18 @@ func main() {
 		panic(err)
 	}
 	log.Println(v)
+
+	return db
+}
+
+func main() {
+	log.Println("touhou booth notify start!")
+	ctx := context.Background()
+	envLoad()
+
+	// Twitter client
+	client := setupTwitterClient()
+	db := setupDB(ctx)
 
 	items, err := getItems()
 	if err != nil {
@@ -97,7 +110,7 @@ func main() {
 
 var _ bun.BeforeAppendModelHook = (*Item)(nil)
 
-func (i *Item) BeforeAppendModel(ctx context.Context, query bun.Query) error {
+func (i *Item) BeforeAppendModel(_ context.Context, query bun.Query) error {
 	switch query.(type) {
 	case *bun.InsertQuery:
 		now := time.Now()
