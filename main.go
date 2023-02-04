@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/dghubble/go-twitter/twitter"
 	"github.com/dghubble/oauth1"
 	"github.com/gocolly/colly"
@@ -95,6 +96,15 @@ func setupMastodonClient(ctx context.Context) *mastodon.Client {
 	return c
 }
 
+func setupDiscord() *discordgo.Session {
+	token := mustGetenv("DISCORD_BOT_TOKEN")
+	discord, err := discordgo.New("Bot " + token)
+	if err != nil {
+		log.Fatalf("error discord setup: %s", err)
+	}
+	return discord
+}
+
 func setupDB(ctx context.Context) *bun.DB {
 	dsn := mustGetenv("DATABASE_DSN")
 
@@ -116,11 +126,18 @@ func main() {
 	ctx := context.Background()
 	envLoad()
 
+	db := setupDB(ctx)
 	// Twitter client
 	tClient := setupTwitterClient()
 	// Mastodon client
 	mClient := setupMastodonClient(ctx)
-	db := setupDB(ctx)
+	// Discord client
+	discord := setupDiscord()
+	err := discord.Open()
+	if err != nil {
+		log.Fatalf("error opening connection: %s", err)
+	}
+	defer discord.Close()
 
 	items, err := getItems()
 	if err != nil {
@@ -128,7 +145,7 @@ func main() {
 	}
 
 	for i := len(items) - 1; i >= 0; i-- {
-		run(ctx, db, items[i], tClient, mClient)
+		run(ctx, db, items[i], tClient, mClient, discord)
 	}
 	log.Println("touhou booth notify successfully completed!")
 }
@@ -183,7 +200,8 @@ func getItems() ([]*Item, error) {
 	return items, nil
 }
 
-func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli *mastodon.Client) {
+func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli *mastodon.Client, dCli *discordgo.Session) {
+	channelID := mustGetenv("DISCORD_CHANNEL_ID")
 	dbItem := itemFindByURL(ctx, db, item.URL)
 
 	if dbItem.ID == 0 {
@@ -191,15 +209,17 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 			return
 		}
 
-		msg := fmt.Sprintf("【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ",
+		msg := fmt.Sprintf("【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s",
 			item.Category,
 			item.Name,
 			decimal.RequireFromString(item.Price),
 			item.URL,
 			item.ShopName,
 		)
-		tweet(tCli, msg)
-		toot(ctx, mCli, msg)
+
+		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+		toot(ctx, mCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+		sendMessage(dCli, channelID, msg)
 	} else if item.Price != dbItem.Price {
 		oldPrice := decimal.RequireFromString(dbItem.Price)
 		newPrice := decimal.RequireFromString(item.Price)
@@ -208,7 +228,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 			return
 		}
 
-		msg := fmt.Sprintf("【🆙更新情報🆙】\n\n%s\n%s\n%s円 -> %s円\n\n%s\n%s\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ",
+		msg := fmt.Sprintf("【🆙更新情報🆙】\n\n%s\n%s\n%s円 -> %s円\n\n%s\n%s",
 			item.Category,
 			item.Name,
 			oldPrice,
@@ -216,8 +236,10 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 			item.URL,
 			item.ShopName,
 		)
-		tweet(tCli, msg)
-		toot(ctx, mCli, msg)
+
+		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+		toot(ctx, mCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+		sendMessage(dCli, channelID, msg)
 	}
 }
 
@@ -260,5 +282,12 @@ func toot(ctx context.Context, cli *mastodon.Client, msg string) {
 	_, err := cli.PostStatus(ctx, t)
 	if err != nil {
 		log.Printf("toot error: %s", err)
+	}
+}
+
+func sendMessage(s *discordgo.Session, channelID, msg string) {
+	_, err := s.ChannelMessageSend(channelID, msg)
+	if err != nil {
+		log.Println("Error sending message: ", err)
 	}
 }

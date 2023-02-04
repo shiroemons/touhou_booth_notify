@@ -3,8 +3,9 @@ module github.com/shiroemons/touhou_booth_notify
 go 1.18
 
 require (
-	github.com/dghubble/go-twitter v0.0.0-20220816163853-8a0df96f1e6d
-	github.com/dghubble/oauth1 v0.7.1
+	github.com/bwmarrin/discordgo v0.27.0
+	github.com/dghubble/go-twitter v0.0.0-20221104224141-912508c3888b
+	github.com/dghubble/oauth1 v0.7.2
 	github.com/gocolly/colly v1.2.0
 	github.com/joho/godotenv v1.4.0
 	github.com/mattn/go-mastodon v0.0.6
