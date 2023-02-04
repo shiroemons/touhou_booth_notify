@@ -13,6 +13,7 @@ import (
 	"github.com/dghubble/oauth1"
 	"github.com/gocolly/colly"
 	"github.com/joho/godotenv"
+	"github.com/mattn/go-mastodon"
 	"github.com/shopspring/decimal"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
@@ -72,6 +73,28 @@ func setupTwitterClient() *twitter.Client {
 	return twitter.NewClient(httpClient)
 }
 
+func setupMastodonClient(ctx context.Context) *mastodon.Client {
+	var (
+		serverURL    = mustGetenv("MASTODON_SERVER_URL")
+		clientID     = mustGetenv("MASTODON_CLIENT_ID")
+		clientSecret = mustGetenv("MASTODON_CLIENT_SECRET")
+		email        = mustGetenv("MASTODON_EMAIL")
+		password     = mustGetenv("MASTODON_PASSWORD")
+	)
+
+	c := mastodon.NewClient(&mastodon.Config{
+		Server:       serverURL,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+	})
+
+	err := c.Authenticate(ctx, email, password)
+	if err != nil {
+		log.Fatalf("Error mastodon login: %s", err)
+	}
+	return c
+}
+
 func setupDB(ctx context.Context) *bun.DB {
 	dsn := mustGetenv("DATABASE_DSN")
 
@@ -94,7 +117,9 @@ func main() {
 	envLoad()
 
 	// Twitter client
-	client := setupTwitterClient()
+	tClient := setupTwitterClient()
+	// Mastodon client
+	mClient := setupMastodonClient(ctx)
 	db := setupDB(ctx)
 
 	items, err := getItems()
@@ -103,7 +128,7 @@ func main() {
 	}
 
 	for i := len(items) - 1; i >= 0; i-- {
-		run(ctx, db, items[i], client)
+		run(ctx, db, items[i], tClient, mClient)
 	}
 	log.Println("touhou booth notify successfully completed!")
 }
@@ -158,7 +183,7 @@ func getItems() ([]*Item, error) {
 	return items, nil
 }
 
-func run(ctx context.Context, db *bun.DB, item *Item, cli *twitter.Client) {
+func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli *mastodon.Client) {
 	dbItem := itemFindByURL(ctx, db, item.URL)
 
 	if dbItem.ID == 0 {
@@ -173,7 +198,8 @@ func run(ctx context.Context, db *bun.DB, item *Item, cli *twitter.Client) {
 			item.URL,
 			item.ShopName,
 		)
-		tweet(cli, msg)
+		tweet(tCli, msg)
+		toot(ctx, mCli, msg)
 	} else if item.Price != dbItem.Price {
 		oldPrice := decimal.RequireFromString(dbItem.Price)
 		newPrice := decimal.RequireFromString(item.Price)
@@ -190,7 +216,8 @@ func run(ctx context.Context, db *bun.DB, item *Item, cli *twitter.Client) {
 			item.URL,
 			item.ShopName,
 		)
-		tweet(cli, msg)
+		tweet(tCli, msg)
+		toot(ctx, mCli, msg)
 	}
 }
 
@@ -223,5 +250,15 @@ func tweet(cli *twitter.Client, msg string) {
 	_, _, err := cli.Statuses.Update(msg, nil)
 	if err != nil {
 		log.Printf("tweet error: %s", err)
+	}
+}
+
+func toot(ctx context.Context, cli *mastodon.Client, msg string) {
+	t := &mastodon.Toot{
+		SpoilerText: msg,
+	}
+	_, err := cli.PostStatus(ctx, t)
+	if err != nil {
+		log.Printf("toot error: %s", err)
 	}
 }
