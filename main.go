@@ -218,7 +218,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 		)
 
 		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
-		toot(ctx, mCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+		toot(ctx, mCli, msg)
 		sendMessage(dCli, channelID, msg)
 	} else if item.Price != dbItem.Price {
 		oldPrice := decimal.RequireFromString(dbItem.Price)
@@ -238,7 +238,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 		)
 
 		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
-		toot(ctx, mCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+		toot(ctx, mCli, msg)
 		sendMessage(dCli, channelID, msg)
 	}
 }
