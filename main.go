@@ -21,6 +21,13 @@ import (
 	"github.com/uptrace/bun/driver/pgdriver"
 )
 
+type NotifyParams struct {
+	tCli      *twitter.Client
+	mCli      *mastodon.Client
+	dCli      *discordgo.Session
+	channelID string
+}
+
 type Item struct {
 	bun.BaseModel `bun:"table:items,alias:i"`
 
@@ -60,11 +67,14 @@ func mustGetenv(k string) string {
 
 func setupTwitterClient() *twitter.Client {
 	var (
-		consumerKey       = mustGetenv("TWITTER_CONSUMER_KEY")
-		consumerSecret    = mustGetenv("TWITTER_CONSUMER_SECRET")
-		accessToken       = mustGetenv("TWITTER_ACCESS_TOKEN")
-		accessTokenSecret = mustGetenv("TWITTER_ACCESS_TOKEN_SECRET")
+		consumerKey       = os.Getenv("TWITTER_CONSUMER_KEY")
+		consumerSecret    = os.Getenv("TWITTER_CONSUMER_SECRET")
+		accessToken       = os.Getenv("TWITTER_ACCESS_TOKEN")
+		accessTokenSecret = os.Getenv("TWITTER_ACCESS_TOKEN_SECRET")
 	)
+	if consumerKey == "" || consumerSecret == "" || accessToken == "" || accessTokenSecret == "" {
+		return nil
+	}
 
 	// Twitter client setup
 	config := oauth1.NewConfig(consumerKey, consumerSecret)
@@ -76,12 +86,15 @@ func setupTwitterClient() *twitter.Client {
 
 func setupMastodonClient(ctx context.Context) *mastodon.Client {
 	var (
-		serverURL    = mustGetenv("MASTODON_SERVER_URL")
-		clientID     = mustGetenv("MASTODON_CLIENT_ID")
-		clientSecret = mustGetenv("MASTODON_CLIENT_SECRET")
-		email        = mustGetenv("MASTODON_EMAIL")
-		password     = mustGetenv("MASTODON_PASSWORD")
+		serverURL    = os.Getenv("MASTODON_SERVER_URL")
+		clientID     = os.Getenv("MASTODON_CLIENT_ID")
+		clientSecret = os.Getenv("MASTODON_CLIENT_SECRET")
+		email        = os.Getenv("MASTODON_EMAIL")
+		password     = os.Getenv("MASTODON_PASSWORD")
 	)
+	if serverURL == "" || clientID == "" || clientSecret == "" || email == "" || password == "" {
+		return nil
+	}
 
 	c := mastodon.NewClient(&mastodon.Config{
 		Server:       serverURL,
@@ -97,7 +110,11 @@ func setupMastodonClient(ctx context.Context) *mastodon.Client {
 }
 
 func setupDiscord() *discordgo.Session {
-	token := mustGetenv("DISCORD_BOT_TOKEN")
+	token := os.Getenv("DISCORD_BOT_TOKEN")
+	if token == "" {
+		return nil
+	}
+
 	discord, err := discordgo.New("Bot " + token)
 	if err != nil {
 		log.Fatalf("error discord setup: %s", err)
@@ -121,10 +138,20 @@ func setupDB(ctx context.Context) *bun.DB {
 	return db
 }
 
+var (
+	debug bool
+	_     bun.BeforeAppendModelHook = (*Item)(nil)
+)
+
+func init() {
+	envLoad()
+}
+
 func main() {
 	log.Println("touhou booth notify start!")
+	debug = os.Getenv("DEBUG") != ""
+
 	ctx := context.Background()
-	envLoad()
 
 	db := setupDB(ctx)
 	// Twitter client
@@ -139,18 +166,30 @@ func main() {
 	}
 	defer discord.Close()
 
+	params := NotifyParams{
+		tCli:      tClient,
+		mCli:      mClient,
+		dCli:      discord,
+		channelID: os.Getenv("DISCORD_CHANNEL_ID"),
+	}
+
 	items, err := getItems()
 	if err != nil {
 		log.Fatalf("getItems error: %s", err)
 	}
 
 	for i := len(items) - 1; i >= 0; i-- {
-		run(ctx, db, items[i], tClient, mClient, discord)
+		if debug {
+			if i == 0 {
+				run(ctx, db, items[i], params)
+			}
+		} else {
+			run(ctx, db, items[i], params)
+		}
 	}
+
 	log.Println("touhou booth notify successfully completed!")
 }
-
-var _ bun.BeforeAppendModelHook = (*Item)(nil)
 
 func (i *Item) BeforeAppendModel(_ context.Context, query bun.Query) error {
 	switch query.(type) {
@@ -200,11 +239,21 @@ func getItems() ([]*Item, error) {
 	return items, nil
 }
 
-func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli *mastodon.Client, dCli *discordgo.Session) {
-	channelID := mustGetenv("DISCORD_CHANNEL_ID")
+func run(ctx context.Context, db *bun.DB, item *Item, p NotifyParams) {
 	dbItem := itemFindByURL(ctx, db, item.URL)
 
-	if dbItem.ID == 0 {
+	if debug {
+		title := fmt.Sprintf("【テスト】【🆕新着情報🆕】 %s - %s", item.ShopName, item.Name)
+		msg := fmt.Sprintf("【テスト】【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s",
+			item.Category,
+			item.Name,
+			decimal.RequireFromString(item.Price),
+			item.URL,
+			item.ShopName,
+		)
+
+		notify(ctx, p, title, msg)
+	} else if dbItem.ID == 0 {
 		if err := insert(ctx, db, item); err != nil {
 			return
 		}
@@ -218,9 +267,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 			item.ShopName,
 		)
 
-		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
-		toot(ctx, mCli, title, msg)
-		sendMessage(dCli, channelID, msg)
+		notify(ctx, p, title, msg)
 	} else if item.Price != dbItem.Price {
 		oldPrice := decimal.RequireFromString(dbItem.Price)
 		newPrice := decimal.RequireFromString(item.Price)
@@ -239,9 +286,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 			item.ShopName,
 		)
 
-		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
-		toot(ctx, mCli, title, msg)
-		sendMessage(dCli, channelID, msg)
+		notify(ctx, p, title, msg)
 	}
 }
 
@@ -270,6 +315,18 @@ func update(ctx context.Context, db *bun.DB, item *Item) error {
 	return nil
 }
 
+func notify(ctx context.Context, p NotifyParams, title, msg string) {
+	if p.tCli != nil && !debug {
+		tweet(p.tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+	}
+	if p.mCli != nil {
+		toot(ctx, p.mCli, title, msg)
+	}
+	if p.dCli != nil && p.channelID != "" {
+		sendMessage(p.dCli, p.channelID, msg)
+	}
+}
+
 func tweet(cli *twitter.Client, msg string) {
 	_, _, err := cli.Statuses.Update(msg, nil)
 	if err != nil {
@@ -278,9 +335,17 @@ func tweet(cli *twitter.Client, msg string) {
 }
 
 func toot(ctx context.Context, cli *mastodon.Client, title, msg string) {
+	var visibility string
+	if debug {
+		visibility = mastodon.VisibilityDirectMessage
+	} else {
+		visibility = mastodon.VisibilityFollowersOnly
+	}
+
 	t := &mastodon.Toot{
 		SpoilerText: title,
 		Status:      msg,
+		Visibility:  visibility,
 	}
 	_, err := cli.PostStatus(ctx, t)
 	if err != nil {
