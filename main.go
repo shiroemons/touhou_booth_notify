@@ -209,6 +209,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 			return
 		}
 
+		title := fmt.Sprintf("【🆕新着情報🆕】 %s - %s", item.ShopName, item.Name)
 		msg := fmt.Sprintf("【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s",
 			item.Category,
 			item.Name,
@@ -218,7 +219,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 		)
 
 		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
-		toot(ctx, mCli, msg)
+		toot(ctx, mCli, title, msg)
 		sendMessage(dCli, channelID, msg)
 	} else if item.Price != dbItem.Price {
 		oldPrice := decimal.RequireFromString(dbItem.Price)
@@ -228,6 +229,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 			return
 		}
 
+		title := fmt.Sprintf("【🆙更新情報🆙】 %s - %s", item.ShopName, item.Name)
 		msg := fmt.Sprintf("【🆙更新情報🆙】\n\n%s\n%s\n%s円 -> %s円\n\n%s\n%s",
 			item.Category,
 			item.Name,
@@ -238,7 +240,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, tCli *twitter.Client, mCli
 		)
 
 		tweet(tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
-		toot(ctx, mCli, msg)
+		toot(ctx, mCli, title, msg)
 		sendMessage(dCli, channelID, msg)
 	}
 }
@@ -275,9 +277,10 @@ func tweet(cli *twitter.Client, msg string) {
 	}
 }
 
-func toot(ctx context.Context, cli *mastodon.Client, msg string) {
+func toot(ctx context.Context, cli *mastodon.Client, title, msg string) {
 	t := &mastodon.Toot{
-		SpoilerText: msg,
+		SpoilerText: title,
+		Status:      msg,
 	}
 	_, err := cli.PostStatus(ctx, t)
 	if err != nil {
