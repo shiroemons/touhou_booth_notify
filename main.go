@@ -154,7 +154,7 @@ var (
 	debug  bool
 	_      bun.BeforeAppendModelHook = (*Item)(nil)
 	tagRe                            = regexp.MustCompile(`\B#\S+`)
-	linkRe                           = regexp.MustCompile(`\w+://\S+$`)
+	linkRe                           = regexp.MustCompile(`https?://\S+`)
 )
 
 func init() {
