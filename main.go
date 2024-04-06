@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -150,8 +151,10 @@ func setupDB(ctx context.Context) *bun.DB {
 }
 
 var (
-	debug bool
-	_     bun.BeforeAppendModelHook = (*Item)(nil)
+	debug  bool
+	_      bun.BeforeAppendModelHook = (*Item)(nil)
+	tagRe                            = regexp.MustCompile(`\B#\S+`)
+	linkRe                           = regexp.MustCompile(`\w+://\S+$`)
 )
 
 func init() {
@@ -335,7 +338,7 @@ func notify(ctx context.Context, p NotifyParams, msg, url string) {
 		sendMessage(p.dCli, p.channelID, msg)
 	}
 	if p.bCli != nil {
-		postBluesky(ctx, p.bCli, msg, url)
+		postBluesky(ctx, p.bCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ", url)
 	}
 }
 
@@ -353,32 +356,91 @@ func sendMessage(s *discordgo.Session, channelID, msg string) {
 	}
 }
 
-func postBluesky(ctx context.Context, cli *xrpc.Client, msg, url string) {
+func postBluesky(ctx context.Context, cli *xrpc.Client, text, url string) {
+	post := &bsky.FeedPost{
+		Text:      text,
+		CreatedAt: time.Now().Local().Format(time.RFC3339),
+		Langs:     []string{"ja"},
+		Embed:     &bsky.FeedPost_Embed{},
+	}
+	addLink(cli, post, url)
+
+	for _, entry := range extractTagsBytes(text) {
+		post.Facets = append(post.Facets, &bsky.RichtextFacet{
+			Features: []*bsky.RichtextFacet_Features_Elem{
+				{
+					RichtextFacet_Tag: &bsky.RichtextFacet_Tag{
+						Tag: entry.text,
+					},
+				},
+			},
+			Index: &bsky.RichtextFacet_ByteSlice{
+				ByteStart: entry.start,
+				ByteEnd:   entry.end,
+			},
+		})
+	}
+
+	for _, entry := range extractLinksBytes(text) {
+		post.Facets = append(post.Facets, &bsky.RichtextFacet{
+			Features: []*bsky.RichtextFacet_Features_Elem{
+				{
+					RichtextFacet_Link: &bsky.RichtextFacet_Link{
+						Uri: entry.text,
+					},
+				},
+			},
+			Index: &bsky.RichtextFacet_ByteSlice{
+				ByteStart: entry.start,
+				ByteEnd:   entry.end,
+			},
+		})
+	}
+
 	input := &atproto.RepoCreateRecord_Input{
 		Collection: "app.bsky.feed.post",
 		Repo:       cli.Auth.Did,
 		Record: &lexutil.LexiconTypeDecoder{
-			Val: &bsky.FeedPost{
-				Text:      msg,
-				CreatedAt: time.Now().Local().Format(time.RFC3339),
-				Langs:     []string{"ja"},
-				Embed:     &bsky.FeedPost_Embed{},
-				Tags: []string{
-					"booth_pm",
-					"東方デジタル音楽",
-					"東方Project",
-					"東方楽曲",
-					"東方アレンジ",
-				},
-			},
+			Val: post,
 		},
 	}
-	addLink(cli, input.Record.Val.(*bsky.FeedPost), url)
 
 	_, err := atproto.RepoCreateRecord(ctx, cli, input)
 	if err != nil {
 		log.Println("Error posting to bluesky: ", err)
 	}
+}
+
+type entry struct {
+	start int64
+	end   int64
+	text  string
+}
+
+func extractTagsBytes(text string) []entry {
+	var result []entry
+	matches := tagRe.FindAllStringSubmatchIndex(text, -1)
+	for _, m := range matches {
+		result = append(result, entry{
+			text:  strings.TrimPrefix(text[m[0]:m[1]], "#"),
+			start: int64(len(text[0:m[0]])),
+			end:   int64(len(text[0:m[1]]))},
+		)
+	}
+	return result
+}
+
+func extractLinksBytes(text string) []entry {
+	var result []entry
+	matches := linkRe.FindAllStringSubmatchIndex(text, -1)
+	for _, m := range matches {
+		result = append(result, entry{
+			text:  text[m[0]:m[1]],
+			start: int64(len(text[0:m[0]])),
+			end:   int64(len(text[0:m[1]]))},
+		)
+	}
+	return result
 }
 
 func addLink(xrpcc *xrpc.Client, post *bsky.FeedPost, link string) {
