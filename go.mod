@@ -3,20 +3,22 @@ module github.com/shiroemons/touhou_booth_notify
 go 1.22
 
 require (
+	github.com/PuerkitoBio/goquery v1.8.0
 	github.com/bluesky-social/indigo v0.0.0-20240406021335-c9117c4a0f11
 	github.com/bwmarrin/discordgo v0.27.0
 	github.com/dghubble/go-twitter v0.0.0-20221104224141-912508c3888b
 	github.com/dghubble/oauth1 v0.7.2
 	github.com/gocolly/colly v1.2.0
 	github.com/joho/godotenv v1.5.1
+	github.com/mattn/go-encoding v0.0.2
 	github.com/shopspring/decimal v1.3.1
 	github.com/uptrace/bun v1.1.7
 	github.com/uptrace/bun/dialect/pgdialect v1.1.7
 	github.com/uptrace/bun/driver/pgdriver v1.1.7
+	golang.org/x/net v0.21.0
 )
 
 require (
-	github.com/PuerkitoBio/goquery v1.8.0 // indirect
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/antchfx/htmlquery v1.2.5 // indirect
 	github.com/antchfx/xmlquery v1.3.12 // indirect
@@ -78,7 +80,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.26.0 // indirect
 	golang.org/x/crypto v0.21.0 // indirect
-	golang.org/x/net v0.21.0 // indirect
 	golang.org/x/sys v0.18.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect

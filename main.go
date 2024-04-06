@@ -1,28 +1,35 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/bluesky-social/indigo/api/atproto"
+	comatproto "github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
-	"github.com/bluesky-social/indigo/util"
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/bwmarrin/discordgo"
 	"github.com/dghubble/go-twitter/twitter"
 	"github.com/dghubble/oauth1"
 	"github.com/gocolly/colly"
 	"github.com/joho/godotenv"
+	encoding "github.com/mattn/go-encoding"
 	"github.com/shopspring/decimal"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/driver/pgdriver"
+	"golang.org/x/net/html/charset"
 )
 
 type NotifyParams struct {
@@ -149,6 +156,8 @@ var (
 
 func init() {
 	envLoad()
+
+	time.Local = time.FixedZone("Local", 9*60*60)
 }
 
 func main() {
@@ -245,6 +254,7 @@ func getItems() ([]*Item, error) {
 
 func run(ctx context.Context, db *bun.DB, item *Item, p NotifyParams) {
 	dbItem := itemFindByURL(ctx, db, item.URL)
+	url := item.URL
 
 	if debug {
 		title := fmt.Sprintf("【テスト】【🆕新着情報🆕】 %s - %s", item.ShopName, item.Name)
@@ -262,7 +272,6 @@ func run(ctx context.Context, db *bun.DB, item *Item, p NotifyParams) {
 			return
 		}
 
-		title := fmt.Sprintf("【🆕新着情報🆕】 %s - %s", item.ShopName, item.Name)
 		msg := fmt.Sprintf("【🆕新着情報🆕】\n\n%s\n%s\n%s円\n\n%s\n%s",
 			item.Category,
 			item.Name,
@@ -271,7 +280,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, p NotifyParams) {
 			item.ShopName,
 		)
 
-		notify(ctx, p, title, msg)
+		notify(ctx, p, msg, url)
 	} else if item.Price != dbItem.Price {
 		oldPrice := decimal.RequireFromString(dbItem.Price)
 		newPrice := decimal.RequireFromString(item.Price)
@@ -280,7 +289,6 @@ func run(ctx context.Context, db *bun.DB, item *Item, p NotifyParams) {
 			return
 		}
 
-		title := fmt.Sprintf("【🆙更新情報🆙】 %s - %s", item.ShopName, item.Name)
 		msg := fmt.Sprintf("【🆙更新情報🆙】\n\n%s\n%s\n%s円 -> %s円\n\n%s\n%s",
 			item.Category,
 			item.Name,
@@ -290,7 +298,7 @@ func run(ctx context.Context, db *bun.DB, item *Item, p NotifyParams) {
 			item.ShopName,
 		)
 
-		notify(ctx, p, title, msg)
+		notify(ctx, p, msg, url)
 	}
 }
 
@@ -319,7 +327,7 @@ func update(ctx context.Context, db *bun.DB, item *Item) error {
 	return nil
 }
 
-func notify(ctx context.Context, p NotifyParams, title, msg string) {
+func notify(ctx context.Context, p NotifyParams, msg, url string) {
 	if p.tCli != nil && !debug {
 		tweet(p.tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
 	}
@@ -327,7 +335,7 @@ func notify(ctx context.Context, p NotifyParams, title, msg string) {
 		sendMessage(p.dCli, p.channelID, msg)
 	}
 	if p.bCli != nil {
-		postBluesky(ctx, p.bCli, msg)
+		postBluesky(ctx, p.bCli, msg, url)
 	}
 }
 
@@ -345,15 +353,16 @@ func sendMessage(s *discordgo.Session, channelID, msg string) {
 	}
 }
 
-func postBluesky(ctx context.Context, cli *xrpc.Client, msg string) {
+func postBluesky(ctx context.Context, cli *xrpc.Client, msg, url string) {
 	input := &atproto.RepoCreateRecord_Input{
 		Collection: "app.bsky.feed.post",
 		Repo:       cli.Auth.Did,
 		Record: &lexutil.LexiconTypeDecoder{
 			Val: &bsky.FeedPost{
 				Text:      msg,
-				CreatedAt: time.Now().Format(util.ISO8601),
+				CreatedAt: time.Now().Local().Format(time.RFC3339),
 				Langs:     []string{"ja"},
+				Embed:     &bsky.FeedPost_Embed{},
 				Tags: []string{
 					"booth_pm",
 					"東方デジタル音楽",
@@ -364,9 +373,85 @@ func postBluesky(ctx context.Context, cli *xrpc.Client, msg string) {
 			},
 		},
 	}
+	addLink(cli, input.Record.Val.(*bsky.FeedPost), url)
 
 	_, err := atproto.RepoCreateRecord(ctx, cli, input)
 	if err != nil {
 		log.Println("Error posting to bluesky: ", err)
+	}
+}
+
+func addLink(xrpcc *xrpc.Client, post *bsky.FeedPost, link string) {
+	res, _ := http.Get(link)
+	if res != nil {
+		defer res.Body.Close()
+
+		br := bufio.NewReader(res.Body)
+		var reader io.Reader = br
+
+		data, err2 := br.Peek(1024)
+		if err2 == nil {
+			enc, name, _ := charset.DetermineEncoding(data, res.Header.Get("content-type"))
+			if enc != nil {
+				reader = enc.NewDecoder().Reader(br)
+			} else if len(name) > 0 {
+				enc := encoding.GetEncoding(name)
+				if enc != nil {
+					reader = enc.NewDecoder().Reader(br)
+				}
+			}
+		}
+
+		var title string
+		var description string
+		var imgURL string
+		doc, err := goquery.NewDocumentFromReader(reader)
+		if err == nil {
+			title = doc.Find(`title`).Text()
+			description, _ = doc.Find(`meta[property="description"]`).Attr("content")
+			imgURL, _ = doc.Find(`meta[property="og:image"]`).Attr("content")
+			if title == "" {
+				title, _ = doc.Find(`meta[property="og:title"]`).Attr("content")
+				if title == "" {
+					title = link
+				}
+			}
+			if description == "" {
+				description, _ = doc.Find(`meta[property="og:description"]`).Attr("content")
+				if description == "" {
+					description = link
+				}
+			}
+			post.Embed.EmbedExternal = &bsky.EmbedExternal{
+				External: &bsky.EmbedExternal_External{
+					Description: description,
+					Title:       title,
+					Uri:         link,
+				},
+			}
+		} else {
+			post.Embed.EmbedExternal = &bsky.EmbedExternal{
+				External: &bsky.EmbedExternal_External{
+					Uri: link,
+				},
+			}
+		}
+		if imgURL != "" && post.Embed.EmbedExternal != nil {
+			resp, err := http.Get(imgURL)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				defer resp.Body.Close()
+				b, err := io.ReadAll(resp.Body)
+				if err == nil {
+					resp, err := comatproto.RepoUploadBlob(context.TODO(), xrpcc, bytes.NewReader(b))
+					if err == nil {
+						post.Embed.EmbedExternal.External.Thumb = &lexutil.LexBlob{
+							Ref:      resp.Blob.Ref,
+							MimeType: http.DetectContentType(b),
+							Size:     resp.Blob.Size,
+						}
+					}
+				}
+			}
+		}
 	}
 }
