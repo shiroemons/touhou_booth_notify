@@ -327,7 +327,7 @@ func notify(ctx context.Context, p NotifyParams, title, msg string) {
 		sendMessage(p.dCli, p.channelID, msg)
 	}
 	if p.bCli != nil {
-		postBluesky(ctx, p.bCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+		postBluesky(ctx, p.bCli, msg)
 	}
 }
 
@@ -354,6 +354,13 @@ func postBluesky(ctx context.Context, cli *xrpc.Client, msg string) {
 				Text:      msg,
 				CreatedAt: time.Now().Format(util.ISO8601),
 				Langs:     []string{"ja"},
+				Tags: []string{
+					"booth_pm",
+					"東方デジタル音楽",
+					"東方Project",
+					"東方楽曲",
+					"東方アレンジ",
+				},
 			},
 		},
 	}
