@@ -14,7 +14,6 @@ import (
 	"github.com/dghubble/oauth1"
 	"github.com/gocolly/colly"
 	"github.com/joho/godotenv"
-	"github.com/mattn/go-mastodon"
 	"github.com/shopspring/decimal"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
@@ -23,7 +22,6 @@ import (
 
 type NotifyParams struct {
 	tCli      *twitter.Client
-	mCli      *mastodon.Client
 	dCli      *discordgo.Session
 	channelID string
 }
@@ -84,31 +82,6 @@ func setupTwitterClient() *twitter.Client {
 	return twitter.NewClient(httpClient)
 }
 
-func setupMastodonClient(ctx context.Context) *mastodon.Client {
-	var (
-		serverURL    = os.Getenv("MASTODON_SERVER_URL")
-		clientID     = os.Getenv("MASTODON_CLIENT_ID")
-		clientSecret = os.Getenv("MASTODON_CLIENT_SECRET")
-		email        = os.Getenv("MASTODON_EMAIL")
-		password     = os.Getenv("MASTODON_PASSWORD")
-	)
-	if serverURL == "" || clientID == "" || clientSecret == "" || email == "" || password == "" {
-		return nil
-	}
-
-	c := mastodon.NewClient(&mastodon.Config{
-		Server:       serverURL,
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-	})
-
-	err := c.Authenticate(ctx, email, password)
-	if err != nil {
-		log.Fatalf("Error mastodon login: %s", err)
-	}
-	return c
-}
-
 func setupDiscord() *discordgo.Session {
 	token := os.Getenv("DISCORD_BOT_TOKEN")
 	if token == "" {
@@ -156,8 +129,6 @@ func main() {
 	db := setupDB(ctx)
 	// Twitter client
 	tClient := setupTwitterClient()
-	// Mastodon client
-	mClient := setupMastodonClient(ctx)
 	// Discord client
 	discord := setupDiscord()
 	err := discord.Open()
@@ -168,7 +139,6 @@ func main() {
 
 	params := NotifyParams{
 		tCli:      tClient,
-		mCli:      mClient,
 		dCli:      discord,
 		channelID: os.Getenv("DISCORD_CHANNEL_ID"),
 	}
@@ -319,9 +289,6 @@ func notify(ctx context.Context, p NotifyParams, title, msg string) {
 	if p.tCli != nil && !debug {
 		tweet(p.tCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
 	}
-	if p.mCli != nil {
-		toot(ctx, p.mCli, title, msg)
-	}
 	if p.dCli != nil && p.channelID != "" {
 		sendMessage(p.dCli, p.channelID, msg)
 	}
@@ -331,25 +298,6 @@ func tweet(cli *twitter.Client, msg string) {
 	_, _, err := cli.Statuses.Update(msg, nil)
 	if err != nil {
 		log.Printf("tweet error: %s", err)
-	}
-}
-
-func toot(ctx context.Context, cli *mastodon.Client, title, msg string) {
-	var visibility string
-	if debug {
-		visibility = mastodon.VisibilityDirectMessage
-	} else {
-		visibility = mastodon.VisibilityFollowersOnly
-	}
-
-	t := &mastodon.Toot{
-		SpoilerText: title,
-		Status:      msg,
-		Visibility:  visibility,
-	}
-	_, err := cli.PostStatus(ctx, t)
-	if err != nil {
-		log.Printf("toot error: %s", err)
 	}
 }
 
