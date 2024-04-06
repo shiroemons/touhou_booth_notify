@@ -9,6 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bluesky-social/indigo/api/atproto"
+	"github.com/bluesky-social/indigo/api/bsky"
+	lexutil "github.com/bluesky-social/indigo/lex/util"
+	"github.com/bluesky-social/indigo/util"
+	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/bwmarrin/discordgo"
 	"github.com/dghubble/go-twitter/twitter"
 	"github.com/dghubble/oauth1"
@@ -23,6 +28,7 @@ import (
 type NotifyParams struct {
 	tCli      *twitter.Client
 	dCli      *discordgo.Session
+	bCli      *xrpc.Client
 	channelID string
 }
 
@@ -95,6 +101,31 @@ func setupDiscord() *discordgo.Session {
 	return discord
 }
 
+func setupBluesky(ctx context.Context) *xrpc.Client {
+	cli := &xrpc.Client{
+		Host: "https://bsky.social",
+	}
+
+	identifier := os.Getenv("BLUESKY_HANDLE")
+	password := os.Getenv("BLUESKY_PASSWORD")
+	input := &atproto.ServerCreateSession_Input{
+		Identifier: identifier,
+		Password:   password,
+	}
+	output, err := atproto.ServerCreateSession(ctx, cli, input)
+	if err != nil {
+		log.Fatal(err)
+	}
+	cli.Auth = &xrpc.AuthInfo{
+		AccessJwt:  output.AccessJwt,
+		RefreshJwt: output.RefreshJwt,
+		Handle:     output.Handle,
+		Did:        output.Did,
+	}
+
+	return cli
+}
+
 func setupDB(ctx context.Context) *bun.DB {
 	dsn := mustGetenv("DATABASE_DSN")
 
@@ -136,10 +167,13 @@ func main() {
 		log.Fatalf("error opening connection: %s", err)
 	}
 	defer discord.Close()
+	// Bluesky client
+	bClient := setupBluesky(ctx)
 
 	params := NotifyParams{
 		tCli:      tClient,
 		dCli:      discord,
+		bCli:      bClient,
 		channelID: os.Getenv("DISCORD_CHANNEL_ID"),
 	}
 
@@ -292,6 +326,9 @@ func notify(ctx context.Context, p NotifyParams, title, msg string) {
 	if p.dCli != nil && p.channelID != "" {
 		sendMessage(p.dCli, p.channelID, msg)
 	}
+	if p.bCli != nil {
+		postBluesky(ctx, p.bCli, msg+"\n\n#booth_pm #東方デジタル音楽\n#東方Project #東方楽曲 #東方アレンジ")
+	}
 }
 
 func tweet(cli *twitter.Client, msg string) {
@@ -305,5 +342,24 @@ func sendMessage(s *discordgo.Session, channelID, msg string) {
 	_, err := s.ChannelMessageSend(channelID, msg)
 	if err != nil {
 		log.Println("Error sending message: ", err)
+	}
+}
+
+func postBluesky(ctx context.Context, cli *xrpc.Client, msg string) {
+	input := &atproto.RepoCreateRecord_Input{
+		Collection: "app.bsky.feed.post",
+		Repo:       cli.Auth.Did,
+		Record: &lexutil.LexiconTypeDecoder{
+			Val: &bsky.FeedPost{
+				Text:      msg,
+				CreatedAt: time.Now().Format(util.ISO8601),
+				Langs:     []string{"ja"},
+			},
+		},
+	}
+
+	_, err := atproto.RepoCreateRecord(ctx, cli, input)
+	if err != nil {
+		log.Println("Error posting to bluesky: ", err)
 	}
 }
